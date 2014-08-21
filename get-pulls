@@ -8,20 +8,15 @@ def fetch_pulls(client, repo)
   print '.'
 
   pull_requests = client.pull_requests(repo.id, state: 'open')
-  return nil if pull_requests.size == 0
+  return [] if pull_requests.size == 0
 
-  rows = []
-
-  rows << ["#{repo.name} (#{pull_requests.size})".blue, '', '']
-  pull_requests.each do |pr|
-    rows << [pr.title, pr.user.login.red, pr.html_url.underline]
+  header = ["#{repo.name} (#{pull_requests.size})".blue, '', '']
+  pull_requests.inject([header]) do |rs, pr|
+    rs << [pr.title, pr.user.login.red, pr.html_url.underline]
   end
-
-  rows
 end
 
-org = ARGV.shift || 'lokalebasen'
-
+# Setup
 stack = Faraday::RackBuilder.new do |builder|
   builder.use Faraday::HttpCache
   builder.use Octokit::Response::RaiseError
@@ -32,10 +27,15 @@ Octokit.middleware = stack
 client = Octokit::Client.new(access_token: ENV['GITHUB_ACCESS_TOKEN'])
 client.auto_paginate = true
 
+# Parse argument
+org = ARGV.shift || 'lokalebasen'
+
+# Spawn threads
 threads = client.org_repos(org).collect do |repo|
   Thread.new { fetch_pulls(client, repo) }
 end
 
+# Create table
 table = Terminal::Table.new(headings: ['title', 'user', 'url']) do |tab|
   threads.each_with_index do |t, j|
     Array(t.value).each_with_index do |row, i|
