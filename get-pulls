@@ -35,25 +35,31 @@ end
 
 def fetch_status(repo, pr)
   print '.'.yellow
-  status = ''
+  state = ''
 
   begin
     status = @client.status(repo.full_name,
                             pr.head.sha,
                             accept: ACCEPT)
-                    .state
+
+    if status.total_count == 0
+      state = '--'
+    else
+      state = status.state
+    end
+
     print '.'.green
   rescue Octokit::NotFound
     print 'X'.red
   end
 
-  case status
+  case state
   when 'success'
-    status.green
+    state.green
   when 'pending'
-    status.yellow
+    state.yellow
   else
-    status.red
+    state.red
   end
 end
 
