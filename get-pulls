@@ -4,15 +4,56 @@ require 'faraday-http-cache'
 require 'colorize'
 require 'terminal-table'
 
-def fetch_pulls(client, repo)
-  print '.'
+ACCEPT = 'application/vnd.github.v3+json'
 
-  pull_requests = client.pull_requests(repo.id, state: 'open')
+def fetch_pulls(repo)
+  print '.'.green
+
+  pull_requests = @client.pull_requests(repo.id, state: 'open')
   return [] if pull_requests.size == 0
 
-  header = ["#{repo.name} (#{pull_requests.size})".blue, '', '']
-  pull_requests.inject([header]) do |rs, pr|
-    rs << [pr.title, pr.user.login.red, pr.html_url.underline]
+  threads = pull_requests.collect do |pr|
+    Thread.new { [fetch_pull(repo, pr.number), fetch_status(repo, pr)] }
+  end
+
+  header = ["#{repo.name} (#{pull_requests.size})".blue, '', '', '', '']
+
+  threads.inject([header]) do |rs, thread|
+    pr, status = thread.value
+    rs << [pr.title,
+           pr.user.login.red,
+           status,
+           pr.mergeable ? 'Yes'.green : 'No'.red,
+           pr.html_url.underline]
+  end
+end
+
+def fetch_pull(repo, number)
+  print '.'.blue
+  @client.pull_request(repo.id, number)
+end
+
+def fetch_status(repo, pr)
+  print '.'.yellow
+  status = ''
+
+  begin
+    status = @client.status(repo.full_name,
+                            pr.head.sha,
+                            accept: ACCEPT)
+                    .state
+    print '.'.green
+  rescue Octokit::NotFound
+    print 'X'.red
+  end
+
+  case status
+  when 'success'
+    status.green
+  when 'pending'
+    status.yellow
+  else
+    status.red
   end
 end
 
@@ -21,22 +62,24 @@ stack = Faraday::RackBuilder.new do |builder|
   builder.use Faraday::HttpCache
   builder.use Octokit::Response::RaiseError
   builder.adapter Faraday.default_adapter
+  builder.response :logger if ENV['DEBUG']
 end
 Octokit.middleware = stack
 
-client = Octokit::Client.new(access_token: ENV['GITHUB_ACCESS_TOKEN'])
-client.auto_paginate = true
+@client = Octokit::Client.new(access_token: ENV['GITHUB_ACCESS_TOKEN'])
+@client.auto_paginate = true
 
 # Parse argument
 org = ARGV.shift || 'lokalebasen'
 
 # Spawn threads
-threads = client.org_repos(org).collect do |repo|
-  Thread.new { fetch_pulls(client, repo) }
+threads = @client.org_repos(org).collect do |repo|
+  Thread.new { fetch_pulls(repo) }
 end
 
 # Create table
-table = Terminal::Table.new(headings: ['title', 'user', 'url']) do |tab|
+headings = ['title', 'user', 'status', 'mergeable', 'url']
+table = Terminal::Table.new(headings: headings) do |tab|
   threads.each_with_index do |t, j|
     Array(t.value).each_with_index do |row, i|
       tab.add_separator if i == 0 && j != 0
