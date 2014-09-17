@@ -6,93 +6,135 @@ require 'terminal-table'
 
 ACCEPT = 'application/vnd.github.v3+json'
 
-def fetch_pulls(repo)
-  print '.'.green
+class Client
+  HEADINGS = %w(title user status mergeable url)
 
-  pull_requests = @client.pull_requests(repo.id, state: 'open')
-  return [] if pull_requests.size == 0
+  attr_reader :octokit_client, :org
 
-  threads = pull_requests.collect do |pr|
-    Thread.new { [fetch_pull(repo, pr.number), fetch_status(repo, pr)] }
+  def initialize(access_token, github_username, org)
+    @org = org
+    @github_username = github_username
+    setup_octokit(access_token)
   end
 
-  header = ["#{repo.name} (#{pull_requests.size})".blue, '', '', '', '']
-
-  threads.inject([header]) do |rs, thread|
-    pr, status = thread.value
-    rs << [pr.title,
-           pr.user.login.red,
-           status,
-           pr.mergeable ? 'Yes'.green : 'No'.red,
-           pr.html_url.underline]
+  def show_table
+    table = Terminal::Table.new(headings: HEADINGS) do |tab|
+      threads.each_with_index do |t, j|
+        Array(t.value).each_with_index do |row, i|
+          tab.add_separator if i == 0 && j != 0
+          tab.add_row row
+        end
+      end
+    end
+    print "\r" # Rewind to beginning of line
+    puts table
   end
-end
 
-def fetch_pull(repo, number)
-  print '.'.blue
-  @client.pull_request(repo.id, number)
-end
+  private
 
-def fetch_status(repo, pr)
-  print '.'.yellow
-  state = ''
+  def setup_octokit(access_token)
+    stack = Faraday::RackBuilder.new do |builder|
+      builder.use Faraday::HttpCache
+      builder.use Octokit::Response::RaiseError
+      builder.adapter Faraday.default_adapter
+      builder.response :logger if ENV['DEBUG']
+    end
+    Octokit.middleware = stack
 
-  begin
-    status = @client.status(repo.full_name,
-                            pr.head.sha,
-                            accept: ACCEPT)
+    @octokit_client = Octokit::Client.new(access_token: access_token)
+    @octokit_client.auto_paginate = true
+  end
 
-    if status.total_count == 0
-      state = '--'
+  def threads
+    @octokit_client.org_repos(org).map do |repo|
+      Thread.new { fetch_pulls(repo) }
+    end
+  end
+
+  def fetch_pulls(repo)
+    dot(:green)
+    return [] if pull_requests(repo).size == 0
+
+    threads = pull_requests(repo).map do |pr|
+      Thread.new { [fetch_pull(repo, pr.number), fetch_status(repo, pr)] }
+    end
+
+    header = ["#{repo.name} (#{pull_requests(repo).size})".blue, '', '', '', '']
+
+    threads.reduce([header]) do |result, thread|
+      result << result_column(*thread.value)
+    end
+  end
+
+  def result_column(pr, status)
+    [pr.title,
+     colorize_login(pr.user.login),
+     status,
+     pr.mergeable ? 'Yes'.green : 'No'.red,
+     pr.html_url.underline]
+  end
+
+  def fetch_pull(repo, number)
+    dot(:blue)
+    @octokit_client.pull_request(repo.id, number)
+  end
+
+  def fetch_status(repo, pr)
+    dot(:yellow)
+    state = ''
+
+    begin
+      state = get_state(repo, pr)
+      dot(:green)
+    rescue Octokit::NotFound
+      dot(:red, 'X')
+    end
+
+    color_state(state)
+  end
+
+  def pull_requests(repo)
+    @pull_requests       ||= {}
+    @pull_requests[repo] ||=
+      @octokit_client.pull_requests(repo.id, state: 'open')
+  end
+
+  def colorize_login(login)
+    if login == @github_username
+      login.magenta
     else
-      state = status.state
+      login.red
     end
-
-    print '.'.green
-  rescue Octokit::NotFound
-    print 'X'.red
   end
 
-  case state
-  when 'success'
-    state.green
-  when 'pending'
-    state.yellow
-  else
-    state.red
+  def dot(color, str = '.')
+    print str.send(color)
   end
-end
 
-# Setup
-stack = Faraday::RackBuilder.new do |builder|
-  builder.use Faraday::HttpCache
-  builder.use Octokit::Response::RaiseError
-  builder.adapter Faraday.default_adapter
-  builder.response :logger if ENV['DEBUG']
-end
-Octokit.middleware = stack
+  def get_state(repo, pr)
+    status = @octokit_client.status(repo.full_name,
+                                    pr.head.sha,
+                                    accept: ACCEPT)
+    if status.total_count == 0
+      '--'
+    else
+      status.state
+    end
+  end
 
-@client = Octokit::Client.new(access_token: ENV['GITHUB_ACCESS_TOKEN'])
-@client.auto_paginate = true
-
-# Parse argument
-org = ARGV.shift || 'lokalebasen'
-
-# Spawn threads
-threads = @client.org_repos(org).collect do |repo|
-  Thread.new { fetch_pulls(repo) }
-end
-
-# Create table
-headings = ['title', 'user', 'status', 'mergeable', 'url']
-table = Terminal::Table.new(headings: headings) do |tab|
-  threads.each_with_index do |t, j|
-    Array(t.value).each_with_index do |row, i|
-      tab.add_separator if i == 0 && j != 0
-      tab.add_row row
+  def color_state(state)
+    case state
+    when 'success'
+      state.green
+    when 'pending'
+      state.yellow
+    else
+      state.red
     end
   end
 end
 
-print "\r"
-puts table
+client = Client.new(ENV['GITHUB_ACCESS_TOKEN'],
+                    ARGV.shift || ENV['GITHUB_USERNAME'] || 'omegahm',
+                    ARGV.shift || ENV['GITHUB_ORGANISATION'] || 'lokalebasen')
+client.show_table
