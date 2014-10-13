@@ -7,7 +7,7 @@ require 'terminal-table'
 ACCEPT = 'application/vnd.github.v3+json'
 
 class Client
-  HEADINGS = %w(title user status mergeable url)
+  HEADINGS = %w(title user labels status mergeable url)
 
   attr_reader :octokit_client, :org
 
@@ -56,19 +56,31 @@ class Client
     return [] if pull_requests(repo).size == 0
 
     threads = pull_requests(repo).map do |pr|
-      Thread.new { [fetch_pull(repo, pr.number), fetch_status(repo, pr)] }
+      Thread.new do
+        number = pr.number
+
+        [fetch_pull(repo, number),
+         fetch_status(repo, pr),
+         fetch_labels(repo, number)]
+      end
     end
 
-    header = ["#{repo.name} (#{pull_requests(repo).size})".blue, '', '', '', '']
+    header = ["#{repo.name} (#{pull_requests(repo).size})".blue,
+              '',
+              '',
+              '',
+              '',
+              '']
 
     threads.reduce([header]) do |result, thread|
       result << result_column(*thread.value)
     end
   end
 
-  def result_column(pr, status)
+  def result_column(pr, status, labels)
     [pr.title,
      colorize_login(pr.user.login),
+     labels,
      status,
      pr.mergeable ? 'Yes'.green : 'No'.red,
      pr.html_url.underline]
@@ -91,6 +103,19 @@ class Client
     end
 
     color_state(state)
+  end
+
+  def fetch_labels(repo, number)
+    dot(:yellow)
+    labels = []
+
+    begin
+      labels = @octokit_client.labels_for_issue(repo.id, number)
+                              .map(&:name)
+                              .map(&:yellow)
+    end
+
+    labels.join(', ')
   end
 
   def pull_requests(repo)
