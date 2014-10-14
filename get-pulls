@@ -6,8 +6,15 @@ require 'terminal-table'
 
 ACCEPT = 'application/vnd.github.v3+json'
 
+class String
+  def truncate(length = 80)
+    return self if self.size <= length
+    self[0, length] + '...'
+  end
+end
+
 class Client
-  HEADINGS = %w(title user labels status mergeable url)
+  HEADINGS = %w(title user labels status mergeable url updated)
 
   attr_reader :octokit_client, :org
 
@@ -18,7 +25,7 @@ class Client
   end
 
   def show_table
-    table = Terminal::Table.new(headings: HEADINGS) do |tab|
+    table = Terminal::Table.new(headings: HEADINGS.map(&:bold)) do |tab|
       threads.each_with_index do |t, j|
         Array(t.value).each_with_index do |row, i|
           tab.add_separator if i == 0 && j != 0
@@ -65,7 +72,8 @@ class Client
       end
     end
 
-    header = ["#{repo.name} (#{pull_requests(repo).size})".blue,
+    header = ["#{repo.name} (#{pull_requests(repo).size})".blue.bold,
+              '',
               '',
               '',
               '',
@@ -78,12 +86,13 @@ class Client
   end
 
   def result_column(pr, status, labels)
-    [pr.title,
+    [pr.title.truncate,
      colorize_login(pr.user.login),
      labels,
      status,
      pr.mergeable ? 'Yes'.green : 'No'.red,
-     pr.html_url.underline]
+     pr.html_url.underline,
+     pr.updated_at]
   end
 
   def fetch_pull(repo, number)
