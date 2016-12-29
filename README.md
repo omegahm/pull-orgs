@@ -1,3 +1,9 @@
+## NO LONGER MAINTAINED
+
+Take a look at https://github.com/omegahm/openpull instead.
+
+---
+
 pull-orgs
 =========
 
